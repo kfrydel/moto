@@ -12,4 +12,6 @@ url_paths = {
     r"{0}/v20180820/accesspoint/(?P<name>[\w_:%-]+)$": S3ControlResponse.dispatch,
     r"{0}/v20180820/accesspoint/(?P<name>[\w_:%-]+)/policy$": S3ControlResponse.dispatch,
     r"{0}/v20180820/accesspoint/(?P<name>[\w_:%-]+)/policyStatus$": S3ControlResponse.dispatch,
+    r"{0}/v20180820/jobs$": S3ControlResponse.dispatch,
+    r"{0}/v20180820/jobs/(?P<job_id>[^/]+)$": S3ControlResponse.dispatch,
 }

@@ -1,5 +1,7 @@
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from moto.core.exceptions import RESTError
+
 from moto.core import DEFAULT_ACCOUNT_ID
 from moto.core.base_backend import BackendDict, BaseBackend
 from moto.core.config import default_user_config
@@ -175,6 +177,19 @@ class MotoAPIBackend(BaseBackend):
             default_user_config["lambda"] = config["lambda"]
         if "stepfunctions" in config:
             default_user_config["stepfunctions"] = config["stepfunctions"]
+
+    def configure_s3control(self, config: Dict[str, Any]):
+        restoration_delay_in_seconds = config.get("restoration_delay_in_seconds")
+        if restoration_delay_in_seconds is not None:
+            try:
+                from moto.s3control.jobs import set_restoration_delay
+
+                set_restoration_delay(int(restoration_delay_in_seconds))
+            except ValueError:
+                raise RESTError(
+                    "InvalidParameterValue",
+                    f"restoration_delay_in_seconds must be an integer, given {restoration_delay_in_seconds}",
+                )
 
 
 moto_api_backend = MotoAPIBackend(region_name="global", account_id=DEFAULT_ACCOUNT_ID)

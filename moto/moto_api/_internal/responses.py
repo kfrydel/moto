@@ -375,6 +375,19 @@ class MotoAPIResponse(BaseResponse):
         config = moto_api_backend.get_config()
         return 201, res_headers, json.dumps(config).encode("utf-8")
 
+    def configure_s3control(
+        self,
+        request: Any,
+        full_url: str,  # pylint: disable=unused-argument
+        headers: Any,
+    ) -> TYPE_RESPONSE:
+        from .models import moto_api_backend
+
+        body = self._get_body(headers, request)
+
+        moto_api_backend.configure_s3control(body)
+        return 201, {}, ""
+
     def _get_body(self, headers: Any, request: Any) -> Any:
         if isinstance(request, AWSPreparedRequest):
             return json.loads(request.body)  # type: ignore[arg-type]

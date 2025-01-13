@@ -14,6 +14,7 @@ from moto.s3.models import PublicAccessBlock
 from moto.utilities.utils import PARTITION_NAMES, get_partition
 
 from .exceptions import AccessPointNotFound, AccessPointPolicyNotFound
+from .jobs import JobsController, Job
 
 
 class AccessPoint(BaseModel):
@@ -57,6 +58,7 @@ class S3ControlBackend(BaseBackend):
         super().__init__(region_name, account_id)
         self.public_access_block: Optional[PublicAccessBlock] = None
         self.access_points: Dict[str, Dict[str, AccessPoint]] = defaultdict(dict)
+        self.job_controller = JobsController()
 
     def get_public_access_block(self, account_id: str) -> PublicAccessBlock:
         # The account ID should equal the account id that is set for Moto:
@@ -111,6 +113,12 @@ class S3ControlBackend(BaseBackend):
         self.access_points[account_id][name] = access_point
         return access_point
 
+    def create_job(self, account_id: str, params: Dict[str, Any]) -> str:
+        return self.job_controller.submit_job(account_id, self.partition, params)
+
+    def get_job(self, job_id: str) -> Job:
+        return self.job_controller.get_job(job_id)
+
     def delete_access_point(self, account_id: str, name: str) -> None:
         self.access_points[account_id].pop(name, None)
 
@@ -139,6 +147,11 @@ class S3ControlBackend(BaseBackend):
         """
         self.get_access_point_policy(account_id, name)
         return True
+
+    def reset(self) -> None:
+        self.job_controller.stop()
+
+        super().reset()
 
 
 s3control_backends = BackendDict(

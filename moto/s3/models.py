@@ -244,6 +244,7 @@ class FakeKey(BaseModel, ManagedState):
 
     def restore(self, days: int) -> None:
         self._expiry = utcnow() + datetime.timedelta(days)
+        self.status = "RESTORED"
         s3_backend = s3_backends[self.account_id][self.partition]
         bucket = s3_backend.get_bucket(self.bucket_name)  # type: ignore
         notifications.send_event(

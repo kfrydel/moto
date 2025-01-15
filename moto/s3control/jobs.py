@@ -390,3 +390,11 @@ class JobsController:
             if pre_jobs_count != post_jobs_count:
                 log(f"do_cleanup: jobs {pre_jobs_count} -> {post_jobs_count}")
             time.sleep(1)
+
+    def list_jobs(self, job_statuses_filter):
+        with self._jobs_lock:
+            return [
+                job
+                for job in self._jobs.values()
+                if job.status in job_statuses_filter or not job_statuses_filter
+            ]

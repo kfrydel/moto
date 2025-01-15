@@ -116,6 +116,34 @@ class S3ControlResponse(BaseResponse):
             status=job.status,
         )
 
+    def list_jobs(self) -> str:
+        statuses = self._get_multi_param("jobStatuses")
+        max_results = self._get_int_param("maxResults")
+        next_token = self._get_param("nextToken")
+        list_jobs, next_token = self.backend.list_jobs(
+            job_statuses_filter=statuses, max_results=max_results, next_token=next_token
+        )
+        jobs = [
+            {
+                "creation_time": job.creation_time.timestamp(),
+                "description": "Job description",
+                "job_id": job.job_id,
+                "operation": job.definition.operation_name,
+                "priority": 10,
+                "number_of_tasks_failed": 123,
+                "number_of_tasks_succeeded": 456,
+                "elapsed_time_in_active_seconds": 789,
+                "total_number_of_tasks": 135,
+                "status": job.status,
+                "termination_date": (
+                    job.finish_time.timestamp() if job.finish_time else None
+                ),
+            }
+            for job in list_jobs
+        ]
+        template = self.response_template(LIST_JOBS_TEMPLATE)
+        return template.render(jobs=jobs, next_token=next_token)
+
     def get_access_point(self) -> str:
         account_id, name = self._get_accountid_and_name_from_accesspoint(self.uri)
 
@@ -327,4 +355,36 @@ GET_JOB_INITIATE_S3_RESTORE_TEMPLATE = """
     <GlacierJobTier>{{ glacier_job_tier }}</GlacierJobTier>
   {% endif %}
 </S3InitiateRestoreObject>
+"""
+
+LIST_JOBS_TEMPLATE = """
+<?xml version="1.0" encoding="UTF-8"?>
+<ListJobsResult>
+  {% if next_token is not none %}
+    <NextToken>{{ next_token }}</NextToken>
+  {% endif %}
+  <Jobs>
+    {% for job in jobs %}
+      <JobListDescriptor>
+         <CreationTime>{{ job["creation_time"] }}</CreationTime>
+         <Description>{{ job["description"] }}</Description>
+         <JobId>{{ job["job_id"] }}</JobId>
+         <Operation>{{ job["operation"] }}</Operation>
+         <Priority>{{ job["priority"] }}</Priority>
+         <ProgressSummary>
+            <NumberOfTasksFailed>{{ job["number_of_tasks_failed"] }}</NumberOfTasksFailed>
+            <NumberOfTasksSucceeded>{{ job["number_of_tasks_succeeded"] }}</NumberOfTasksSucceeded>
+            <Timers>
+               <ElapsedTimeInActiveSeconds>{{ job["elapsed_time_in_active_seconds"] }}</ElapsedTimeInActiveSeconds>
+            </Timers>
+            <TotalNumberOfTasks>{{ job["total_number_of_tasks"] }}</TotalNumberOfTasks>
+         </ProgressSummary>
+         <Status>{{ job["status"] }}</Status>
+         {% if job["termination_date"] is not none %}
+           <TerminationDate>{{ job["termination_date"] }}</TerminationDate>
+         {% endif %}
+      </JobListDescriptor>
+    {% endfor %}
+  </Jobs>
+</ListJobsResult>
 """

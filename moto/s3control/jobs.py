@@ -1,12 +1,13 @@
 import csv
 import datetime
 import io
-import traceback
-
 import time
+import traceback
 import uuid
+from copy import copy
 from enum import Enum
-from threading import Thread
+from functools import cached_property
+from threading import Lock, Thread
 from typing import Any, Dict, List, Optional, Tuple
 
 from moto.core.common_models import BaseModel
@@ -16,6 +17,14 @@ from moto.s3.exceptions import MissingBucket
 from .exceptions import InvalidJobOperation, ValidationError
 
 restoration_delay_in_seconds = 60
+
+JOBS_RETENTION_TIME_IN_MINUTES = 15
+
+
+def log(msg):
+    dt = datetime.datetime.now()
+    dt_str = dt.strftime("%d/%b/%Y %H:%M:%S")
+    print(f"[{dt_str}] s3control jobs: {msg}")  # noqa: T201
 
 
 def set_restoration_delay(value_in_seconds):
@@ -151,10 +160,49 @@ class JobDefinition:
     def manifest_path(self):
         return "/".join(self.manifest_arn.split("/")[1:])
 
+    def __repr__(self):
+        return f"<{self.__class__.__name__} {self.__dict__}"
 
-class Job(Thread, BaseModel, ManagedState):
-    def __init__(self, job_id, definition: JobDefinition):
+
+class JobExecutor(Thread):
+    OPERATION = None
+
+    def __init__(self, job: "Job"):
         Thread.__init__(self)
+        self.definition = job.definition
+        self.job = job
+        self.stop_requested = False
+
+    @classmethod
+    def create_executor(cls, job: "Job"):
+        classes = [
+            subclazz
+            for subclazz in cls.__subclasses__()
+            if subclazz.OPERATION == job.definition.operation_name
+        ]
+        if classes:
+            return classes[0](job)
+        else:
+            raise InvalidJobOperation(
+                f"Unsupported operation: {job.definition.operation_name}"
+            )
+
+    @cached_property
+    def _bucket_index_in_csv(self):
+        return self.definition.manifest_fields.index("Bucket")
+
+    @cached_property
+    def _key_index_in_csv(self):
+        return self.definition.manifest_fields.index("Key")
+
+    def _buckets_and_keys_from_csv(self, file_obj):
+        stream = io.StringIO(file_obj.value.decode(encoding="utf-8"))
+        for row in csv.reader(stream):
+            yield row[self._bucket_index_in_csv], row[self._key_index_in_csv]
+
+
+class Job(BaseModel, ManagedState):
+    def __init__(self, job_id, definition: JobDefinition):
         ManagedState.__init__(
             self,
             "s3control::job",
@@ -164,31 +212,59 @@ class Job(Thread, BaseModel, ManagedState):
         self.job_id = job_id
         self.definition = definition
         self.creation_time = datetime.datetime.now()
+        self.finish_time = None
         self.failure_reasons = []
-        self.stop = False
         self.number_of_tasks_succeeded = 0
         self.number_of_tasks_failed = 0
         self.total_number_of_tasks = 0
         self.elapsed_time_in_active_seconds = 0
-        self._bucket_index_in_csv = self.definition.manifest_fields.index("Bucket")
-        self._key_index_in_csv = self.definition.manifest_fields.index("Key")
+        self.executor = JobExecutor.create_executor(self)
+
+    def start(self):
+        self.executor.start()
+
+    def stop(self):
+        if not self.executor:
+            return
+        self.executor.stop_requested = True
+        log(f"joining executor for {self.job_id}")
+        self.executor.join(timeout=2)
+        if not self.executor.is_alive():
+            log(f"releasing executor for {self.job_id}")
+            self.executor = None
+
+    def try_cleanup(self):
+        if not self.executor:
+            return
+        if not self.executor.is_alive():
+            log(f"joining executor for {self.job_id}")
+            self.executor.join(timeout=2)
+        if not self.executor.is_alive():
+            log(f"releasing executor for {self.job_id}")
+            self.executor = None
+
+    def __repr__(self):
+        return (
+            f"<{self.__class__.__name__} job_id={self.job_id} "
+            f"definition={self.definition} creation_time={self.creation_time}>"
+        )
 
 
-class RestoreObjectJob(Job):
-    def __init__(self, job_id, definition: JobDefinition):
-        super().__init__(job_id, definition)
-        self._expiration_days = 1
+class RestoreObjectJob(JobExecutor):
+    OPERATION = "S3InitiateRestoreObject"
+
+    @cached_property
+    def _expiration_days(self):
         if "ExpirationInDays" in self.definition.operation_definition:
             try:
-                self._expiration_days = int(
-                    self.definition.operation_definition["ExpirationInDays"]
-                )
+                return int(self.definition.operation_definition["ExpirationInDays"])
             except ValueError:
                 raise ValidationError("ExpirationInDays")
+        return 1
 
     def run(self):
         try:
-            self.status = JobStatus.PREPARING.value
+            self.job.status = JobStatus.PREPARING.value
             succeeded = []
             failed = []
 
@@ -205,16 +281,16 @@ class RestoreObjectJob(Job):
                 pass
 
             if manifest_file_obj is None:
-                self.failure_reasons.append(
+                self.job.failure_reasons.append(
                     {
                         "code": "ManifestNotFound",
                         "reason": "Manifest object was not found",
                     }
                 )
-                self.status = JobStatus.FAILED.value
+                self.job.status = JobStatus.FAILED.value
                 return
 
-            self.status = JobStatus.ACTIVE.value
+            self.job.status = JobStatus.ACTIVE.value
 
             expiration = datetime.datetime.now() + datetime.timedelta(
                 self._expiration_days, restoration_delay_in_seconds
@@ -229,14 +305,14 @@ class RestoreObjectJob(Job):
                     key_obj.status = "IN_PROGRESS"
                     key_obj.set_expiry(expiration)
 
-            self.status = JobStatus.COMPLETE.value
+            self.job.status = JobStatus.COMPLETE.value
 
             sleep_time = datetime.datetime.now() + datetime.timedelta(
                 0, restoration_delay_in_seconds
             )
             while datetime.datetime.now() < sleep_time:
                 time.sleep(0.5)
-                if self.stop:
+                if self.stop_requested:
                     return
 
             for bucket_and_key in self._buckets_and_keys_from_csv(manifest_file_obj):
@@ -251,45 +327,66 @@ class RestoreObjectJob(Job):
                 else:
                     failed.append(bucket_and_key)
         except Exception as exc:
-            print(f"Exception in job {self.job_id}: {exc}\n")  # noqa: T201
-            print(f"Stacktrace: {traceback.format_exc() }\n")  # noqa: T201
-
-    def _buckets_and_keys_from_csv(self, file_obj):
-        stream = io.StringIO(file_obj.value.decode(encoding="utf-8"))
-        for row in csv.reader(stream):
-            yield row[self._bucket_index_in_csv], row[self._key_index_in_csv]
-
-
-operation_to_job = {"S3InitiateRestoreObject": RestoreObjectJob}
+            log(f"Exception in job {self.job.job_id}: {exc}\n")
+            log(f"Stacktrace: {traceback.format_exc() }\n")
+        finally:
+            self.job.finish_time = datetime.datetime.now()
 
 
 class JobsController:
     def __init__(self):
         self._jobs: Dict[str, Job] = {}
+        self._cleanup_job = None
+        self._stop_requested = False
+        self._jobs_lock = Lock()
 
     def stop(self):
+        log("stop")
         for job in self._jobs.values():
             if job.status not in (JobStatus.FAILED, JobStatus.COMPLETE):
-                job.stop = True
-                # Try to join
-                if job.is_alive():
-                    job.join(2)
+                job.stop()
+        self._stop_requested = True
+        self._cleanup_job.join(2)
 
     def submit_job(
         self, account_id: str, partition: str, params: Dict[str, Any]
     ) -> str:
+        self.ensure_cleanup_job()
         job_definition = JobDefinition.from_dict(account_id, partition, params)
-        job_class = operation_to_job.get(job_definition.operation_name)
-        if job_class is None:
-            raise InvalidJobOperation(
-                f"Unsupported operation: {job_definition.operation_name}"
-            )
-
         job_id = str(uuid.uuid4())
-        job = job_class(job_id, job_definition)
-        self._jobs[job_id] = job
+        job = Job(job_id, job_definition)
+        with self._jobs_lock:
+            self._jobs[job_id] = job
         job.start()
+        log(f"job submitted: {job=}")
         return job_id
 
     def get_job(self, job_id):
-        return self._jobs.get(job_id)
+        with self._jobs_lock:
+            return self._jobs.get(job_id)
+
+    def ensure_cleanup_job(self):
+        if not self._cleanup_job:
+            self._stop_requested = False
+            self._cleanup_job = Thread(group=None, target=self.do_cleanup)
+            self._cleanup_job.start()
+
+    def do_cleanup(self):
+        while not self._stop_requested:
+            with self._jobs_lock:
+                jobs = copy(self._jobs)
+            for job in jobs.values():
+                job.try_cleanup()
+            with self._jobs_lock:
+                now = datetime.datetime.now()
+                pre_jobs_count = len(self._jobs)
+                self._jobs = {
+                    job_id: job
+                    for job_id, job in self._jobs.items()
+                    if not job.finish_time
+                    or now - job.finish_time < datetime.timedelta(minutes=JOBS_RETENTION_TIME_IN_MINUTES)
+                }
+                post_jobs_count = len(self._jobs)
+            if pre_jobs_count != post_jobs_count:
+                log(f"do_cleanup: jobs {pre_jobs_count} -> {post_jobs_count}")
+            time.sleep(1)

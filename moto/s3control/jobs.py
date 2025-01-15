@@ -1,6 +1,8 @@
 import csv
 import datetime
 import io
+import traceback
+
 import time
 import uuid
 from enum import Enum
@@ -249,7 +251,8 @@ class RestoreObjectJob(Job):
                 else:
                     failed.append(bucket_and_key)
         except Exception as exc:
-            print(f"Exception in job {self.job_id}: {exc}")  # noqa: T201
+            print(f"Exception in job {self.job_id}: {exc}\n")  # noqa: T201
+            print(f"Stacktrace: {traceback.format_exc() }\n")  # noqa: T201
 
     def _buckets_and_keys_from_csv(self, file_obj):
         stream = io.StringIO(file_obj.value.decode(encoding="utf-8"))

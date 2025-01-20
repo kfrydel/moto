@@ -280,6 +280,20 @@ class RestoreObjectJob(JobExecutor):
             except MissingBucket:
                 pass
 
+            if self.definition.report_enabled:
+                report_bucket = self.definition.report_bucket.split(":")[-1]
+                try:
+                    backend.get_bucket(report_bucket)
+                except MissingBucket:
+                    self.job.failure_reasons.append(
+                        {
+                            "code": "NoSuchBucket",
+                            "reason": f"Invalid manifest was provided. Target bucket {report_bucket} does not exist.",
+                        }
+                    )
+                    self.job.status = JobStatus.FAILED.value
+                    return
+
             if manifest_file_obj is None:
                 self.job.failure_reasons.append(
                     {

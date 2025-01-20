@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from moto.core.common_models import BaseModel
 from moto.moto_api._internal.managed_state_model import ManagedState
 from moto.s3.exceptions import MissingBucket
+from moto.s3.models import s3_backends
 
 from .exceptions import InvalidJobOperation, ValidationError
 
@@ -263,13 +264,10 @@ class RestoreObjectJob(JobExecutor):
         return 1
 
     def run(self):
+        succeeded = []
+        failed = []
         try:
             self.job.status = JobStatus.PREPARING.value
-            succeeded = []
-            failed = []
-
-            from moto.s3.models import s3_backends
-
             backend = s3_backends[self.definition.account_id][self.definition.partition]
 
             manifest_file_obj = None
@@ -311,6 +309,7 @@ class RestoreObjectJob(JobExecutor):
             )
 
             for bucket, key in self._buckets_and_keys_from_csv(manifest_file_obj):
+                self.job.total_number_of_tasks += 1
                 try:
                     key_obj = backend.get_object(bucket, key)
                 except MissingBucket:
@@ -318,7 +317,11 @@ class RestoreObjectJob(JobExecutor):
                 if key_obj is not None:
                     key_obj.status = "IN_PROGRESS"
                     key_obj.set_expiry(expiration)
+                    self.job.number_of_tasks_succeeded += 1
 
+            self.job.number_of_tasks_failed = (
+                self.job.total_number_of_tasks - self.job.number_of_tasks_succeeded
+            )
             self.job.status = JobStatus.COMPLETE.value
 
             sleep_time = datetime.datetime.now() + datetime.timedelta(

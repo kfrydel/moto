@@ -97,6 +97,7 @@ class S3ControlResponse(BaseResponse):
             job_id=job_id,
             account_id=account_id,
             operation=operation,
+            description=job.definition.description,
             creation_time=iso_8601_datetime_without_milliseconds(job.creation_time),
             failure_reasons=job.failure_reasons,
             region_name=self.backend.region_name,
@@ -126,7 +127,7 @@ class S3ControlResponse(BaseResponse):
         jobs = [
             {
                 "creation_time": job.creation_time.timestamp(),
-                "description": "Job description",
+                "description": job.definition.description,
                 "job_id": job.job_id,
                 "operation": job.definition.operation_name,
                 "priority": 10,
@@ -295,7 +296,7 @@ GET_JOB_TEMPLATE = """
   <Job>
     <ConfirmationRequired>False</ConfirmationRequired>
     <CreationTime>{{ creation_time }}</CreationTime>
-    <Description>Job description</Description>
+    <Description>{{ description }}</Description>
     <FailureReasons>
     {% for failure_reason in failure_reasons %}
       <JobFailure>

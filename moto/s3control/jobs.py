@@ -82,6 +82,7 @@ class JobDefinition:
     def __init__(
         self,
         account_id: str,
+        description: str,
         partition: str,
         operation_name: str,
         operation_definition: Dict[str, Any],
@@ -97,6 +98,7 @@ class JobDefinition:
         report_scope: str | None,
     ):
         self.account_id = account_id
+        self.description = description
         self.partition = partition
         self.operation_name = operation_name
         self.operation_definition = operation_definition
@@ -118,6 +120,7 @@ class JobDefinition:
         operation_tuple = list(params["Operation"].items())[0]
         operation_name = operation_tuple[0]
         operation_params = operation_tuple[1]
+        description = params.get("Description", "Description not given")
         manifest = params["Manifest"]
         manifest_location = manifest["Location"]
         manifest_location_etag = manifest_location.get("ETag")
@@ -138,6 +141,7 @@ class JobDefinition:
             report_enabled = report_enabled.lower() == "true"
         return JobDefinition(
             account_id=account_id,
+            description=description,
             partition=partition,
             operation_name=operation_name,
             operation_definition=operation_definition,

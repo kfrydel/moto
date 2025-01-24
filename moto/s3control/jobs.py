@@ -312,7 +312,9 @@ class RestoreObjectJob(JobExecutor):
                 self._expiration_days, restoration_delay_in_seconds
             )
 
-            for bucket, key in self._buckets_and_keys_from_csv(manifest_file_obj):
+            buckets_and_keys = list(self._buckets_and_keys_from_csv(manifest_file_obj))
+
+            for bucket, key in buckets_and_keys:
                 self.job.total_number_of_tasks += 1
                 try:
                     key_obj = backend.get_object(bucket, key)
@@ -336,7 +338,7 @@ class RestoreObjectJob(JobExecutor):
                 if self.stop_requested:
                     return
 
-            for bucket_and_key in self._buckets_and_keys_from_csv(manifest_file_obj):
+            for bucket_and_key in buckets_and_keys:
                 try:
                     key_obj = backend.get_object(*bucket_and_key)
                 except MissingBucket:

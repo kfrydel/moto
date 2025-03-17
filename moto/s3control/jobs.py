@@ -382,7 +382,7 @@ class RestoreObjectJob(JobExecutor):
             return None
         # It is string like AccessDenied but for some reason Amazon call it http status code,
         # this code just keeps their naming
-        http_status_code = key.removeprefix("fail_with_")
+        http_status_code = key.removeprefix("fail_with_").split("_")[0]
         error_code = 400
         result_message = "Unknown error occurred"
         match http_status_code:
